@@ -1,0 +1,226 @@
+---
+title: "Inflation And Stock Market Returns In India"
+author: "Abhishek Mishra"
+date: "20th July 2018"
+output:
+  pdf_document:
+    df_print: kable
+    toc: true
+    number_sections: true
+  html_document:
+    df_print: paged
+  word_document: default
+---
+```{r echo=FALSE}
+library(data.table)
+library(ggplot2)
+library(ggthemes)
+library(knitr)
+library(kableExtra)
+```
+
+\pagebreak
+
+# India's Consumer Price Inflation(CPI) and NSE Nifty Total Returns Index since 2000.
+A quick word on the data:
+
+1. __CPI Data__: For the purpose of this analysis we use Consumer Price Inflation (CPI) data. The source of this data is data.worldbank.org and inflation.eu
+
+```{r echo=FALSE, message=F, warning=F}
+# historical inflation rates (countries and world)
+# https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG?locations=IN
+world_cpi_flat <- fread('../data/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_9944890.csv', header=T)
+world_cpi <- melt(world_cpi_flat, id.vars=c('Country Name', 'Country Code'), measure.vars=5:62)
+setnames(world_cpi, 3:4, c('Year', 'CPI'))
+world_cpi$CPI <- as.numeric(world_cpi$CPI)
+world_cpi$Year <- as.numeric(as.character(world_cpi$Year))
+india_hist_cpi <- world_cpi[`Country Name` == "India"]
+
+# Source http://www.inflation.eu/inflation-rates/india/historic-inflation/cpi-inflation-india.aspx
+india_hist_cpi[Year == 2017]$CPI <- 2.49
+
+#head(india_hist_cpi)
+```
+
+2. __NIFTY Total Returns data__: NIFTY Total Returns data is available since 2000
+
+```{r echo=FALSE}
+niftytot = fread('../data/nifty50-totalreturns-2000-1-2018-5.csv', header=T)
+niftytot$Date <- as.POSIXct(strptime(niftytot$Date, '%d-%b-%Y'))
+
+ntr <- niftytot[month(niftytot$Date) == 1]
+ntr$Year <- year(ntr$Date)
+ntr <- ntr[ , .SD[which.min(Date)], by = Year]
+
+#qplot(ntr$Year, ntr$TotalReturnsIndex)
+
+ntr$diffClose <- append(c(0), diff(ntr$TotalReturnsIndex))
+ntr$MktChange <- (ntr$diffClose / (ntr$TotalReturnsIndex - ntr$diffClose)) * 100
+#head(ntri90to18)
+```
+
+3. __Compare CPI and Nifty Total Returns__: Join CPI and Index Data for 2000 Onwards
+We will join the two datasets into the same table to be able to compare them.
+
+```{r echo=FALSE}
+india_cpi_and_ntri <- merge(india_hist_cpi, ntr, all=FALSE)
+#head(india_cpi_and_ntri)
+```
+
+```{r echo=FALSE}
+cpi_and_mktchange <- india_cpi_and_ntri[, c('Year', 'CPI', 'TotalReturnsIndex', 'MktChange')]
+#head(cpi_and_mktchange)
+```
+
+4. __Base Year 2000__: Calculate Cash and Nifty Total Returns Index (TRI) with a base year of 2000
+We calculate the cash and market values with a value of 100 for base year 2000.
+
+```{r echo=FALSE}
+cpi_and_mktchange$Cash <- c(100)
+for (yr in cpi_and_mktchange$Year) {
+  if (yr > 2000) {
+    #print(yr)
+    prev_yr <- yr - 1
+    prev_cash <- cpi_and_mktchange[Year == prev_yr]$Cash
+    prev_cpi <- cpi_and_mktchange[Year == prev_yr]$CPI
+    #print(prev_cash)
+    cash <- (prev_cash * (100 - prev_cpi))/100
+    #print(cash)
+    cpi_and_mktchange[Year == yr]$Cash <- cash
+  }
+}
+
+cpi_and_mktchange$Market <- c(100)
+for (yr in cpi_and_mktchange$Year) {
+  if (yr > 2000) {
+    prev_yr <- yr - 1
+    prev_market <- cpi_and_mktchange[Year == prev_yr]$Market
+    prev_chg <- cpi_and_mktchange[Year == yr]$MktChange
+    #print(prev_market)
+    market <- (prev_market * (100 + prev_chg))/100
+    #print(market)
+    cpi_and_mktchange[Year == yr]$Market <- market
+  }
+}
+
+cpi_and_mktchange[, MarketInflationAdj := (Market * Cash)/100]
+cpi_and_mktchange[, MarketValueGrowth := 100 * (MarketInflationAdj/shift(MarketInflationAdj, type="lag") - 1)]
+cpi_and_mktchange <- cpi_and_mktchange[Year > 2000]
+cpi_and_mktchange[is.na(MarketValueGrowth), MarketValueGrowth:=0]
+#head(cpi_and_mktchange, 40)
+```
+
+
+5. __CAGR__: Compounded Annual Growth Rate (CAGR) of Nifty Total Returns Index for every year
+
+
+```{r echo=FALSE}
+cagr <- function(start, end, years) {
+  return (((end/start)^(1/years) - 1) * 100)
+}
+
+cpi_and_mktchange[, MarketCAGR:=cagr(100, MarketInflationAdj, Year - 2000)]
+```
+
+Here's the data we will look at...
+```{r echo=FALSE}
+kable(cpi_and_mktchange, caption='Cash and Nifty Total Returns [2000 - 2017]',
+      col.names = c('Year', 'CPI', 'YearEnd', 'Change YoY %',
+                    'Cash\n (base year 2000)', 'Nifty Total Returns Index', 
+                    'Inflation Adj', 'Inflation Adj Growth YoY',
+                    'Inflation Adj CAGR (%)'),
+      format="latex", booktabs = T, digits=2, align='c') %>%
+  kable_styling (font_size = 8) %>%
+  add_header_above(c(" " = 2, "Nifty Total Returns" = 2, " " = 1, "Nifty Total Returns Normalized (base year 2000)" = 4)) %>%
+  kable_styling(latex_options = c("repeat_header", "striped", "scale_down")) %>%
+  landscape ()
+```
+
+
+\pagebreak
+
+# Cash Weakens, Market Value Grows
+Notice that if you had held __100 Rs worth of cash in 2000__, then it's purchasing power would have reduced to __30 Rs 75 paise in 2017__. 
+
+Also notice that if you had put __100 Rs in the Market__, then ajusting to inflation but not counting commisions/fees it would have been worth __200 Rs 94 Paise in 2017__.
+
+
+# Market provides protection against Inflation
+Now we will plot this data for an initial analysis
+
+```{r echo=FALSE}
+ggplot(cpi_and_mktchange, aes(Year)) +
+  geom_line(aes(y=Cash, color="Cash"), size=2) +
+  geom_line(aes(y=MarketInflationAdj, color="Market Value - Inflation Adjusted"), size=2) +
+  ylab("Rs") +
+  ggtitle("Cash Vs. Market (Nifty Total Returns) [2000-2017]") +
+  theme_economist()
+```
+
+
+So looks like the market does give some protection from inflation, but what is the amount of protection per year? Let's look at that in the next section.
+
+\pagebreak
+
+# Market fluctuations
+
+*__"It will fluctuate."__*
+    
+*-     J.P Morgan, when asked what the stock market will do*
+
+
+
+BSE Nifty Total Returns has had wide fluctuations over the years, although in most years it has ended in positive territory.
+```{r echo=FALSE}
+ggplot(cpi_and_mktchange, aes(Year)) +
+  geom_col(aes(y=MktChange, fill=sign(MktChange))) +
+  guides(fill=FALSE) +
+  geom_text(aes(y = MktChange + 10 * sign(MktChange), label=sprintf("%.1f", MktChange)), 
+          position = position_dodge(width = 1), 
+          size = 3.5 , angle = 90) +
+  ylab("% change") +
+  ggtitle("Market (Nifty Total Returns) YoY Change [2000-2017]") +
+  theme_economist()
+```
+
+
+Let us see what is the story of the inflation adjusted Market Valuation. And the conclusions would be the same
+
+1. Market has wide fluctuations
+2. Market ended postive in most years
+
+```{r echo=FALSE}
+ggplot(cpi_and_mktchange, aes(Year)) +
+  geom_col(aes(y=MarketValueGrowth, fill=sign(MarketValueGrowth))) +
+  guides(fill=FALSE) +
+  geom_text(aes(y = MarketValueGrowth + 10 * sign(MarketValueGrowth), label=sprintf("%.1f", MarketValueGrowth)), 
+          position = position_dodge(width = 1), 
+          size = 3.5 , angle = 90) +
+  ylab("% change") +
+  ggtitle("Market (Nifty Total Returns) \nInflation Adjusted YoY Change [2000-2017]") +
+  theme_economist() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+\pagebreak
+
+# Market Growth
+We measure the overall growth of the market using Compounded Annual Growth Rate (CAGR) of the Inflation Adjusted Market Value. Note that the CAGR at the end of 2017 was around 4.2%. This is the protection above prevailing inflation.
+
+```{r echo=FALSE}
+ggplot(cpi_and_mktchange, aes(Year)) +
+  geom_col(aes(y=MarketCAGR, fill=sign(MarketCAGR))) +
+  guides(fill=FALSE) +
+  geom_text(aes(y = MarketCAGR + 2 * sign(MarketCAGR), label=sprintf("%.1f", MarketCAGR)), 
+          position = position_dodge(width = 1), 
+          size = 3.5 , angle = 90) +
+  ylab("% change") +
+  ggtitle("Market (Nifty Total Returns) Inflation Adjusted CAGR [2000-2017]") +
+  theme_economist()
+```
+
+\pagebreak
+
+# Conclusion
+
+__You would need a savings rate in a Bank account or fixed deposit of *4.2% above inflation rate* to provide the same kind of returns in the long term.__
